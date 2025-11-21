@@ -1,0 +1,4 @@
+.venv*
+
+# Model weights (too large for GitHub)
+model_weights/
