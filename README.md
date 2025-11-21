@@ -16,19 +16,23 @@ Qwen3-Reranker-8B is a state-of-the-art text reranking model that:
 - **Batch Processing**: Handles multiple documents in batches
 - **Flexible Input**: Accepts JSON array of documents
 - **Top-k Selection**: Returns most relevant documents
-- **Optimized Setup**: Uses uv for dependency management
+- **Optimized Setup**: Uses Cog for Replicate deployment
 
 ## Setup
 
-The project has been initialized with `uv` for Python package management and configured with Cog for Replicate deployment.
+The project is configured with Cog for Replicate deployment and includes all necessary dependencies.
 
 ### Dependencies
 
-Core dependencies managed with uv:
+Core dependencies included in requirements.txt:
 - `torch>=2.9.1`
 - `transformers>=4.57.1`
 - `accelerate>=1.11.0`
 - All required CUDA libraries
+
+### Model Weights
+
+Model weights are stored locally in the `model_weights/` directory for faster deployment. The setup automatically detects local weights and loads them; if not found, it falls back to downloading from HuggingFace.
 
 ## Usage
 
@@ -115,20 +119,20 @@ cog push r8.im/your-username/qwen3-reranker-8b
 qwen3-reranker-8b/
 ├── cog.yaml          # Cog configuration
 ├── predict.py        # Model inference logic
-├── requirements.txt  # Python dependencies (uv-managed)
+├── requirements.txt  # Python dependencies
 ├── test_predict.py   # Local testing script
 ├── README.md         # This file
-└── pyproject.toml    # uv project configuration
+└── model_weights/    # Model weights (local, git-ignored)
 ```
 
 ## Development
 
 ### Adding Dependencies
 
-```bash
-uv add new-package
-uv pip freeze > requirements.txt
-```
+To add new dependencies:
+1. Add them to `requirements.txt`
+2. Update the version appropriately
+3. Test with `cog run python -c "import new_package"`
 
 ### Testing
 
