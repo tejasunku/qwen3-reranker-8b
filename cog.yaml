@@ -4,7 +4,7 @@
 build:
   # set to true if your model requires a GPU
   gpu: true
-  cuda: "12.1"
+  cuda: "12.8"
 
   # a list of ubuntu apt packages to install
   system_packages:
@@ -19,9 +19,9 @@ build:
   python_requirements: requirements.txt
 
   # commands run after the environment is setup
-  # Pre-download the model weights
   run:
-    - "python -c \"from transformers import AutoModelForSequenceClassification; AutoModelForSequenceClassification.from_pretrained('Qwen/Qwen3-Reranker-8B', trust_remote_code=True)\""
 
 # predict.py defines how predictions are run on your model
 predict: "predict.py:Predictor"
+
+image: "r8.im/tejasunku/qwen3-reranker-8b"

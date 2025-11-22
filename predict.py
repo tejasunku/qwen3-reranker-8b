@@ -22,21 +22,68 @@ class Predictor(BasePredictor):
             print("Loading model from HuggingFace...")
             model_path = "Qwen/Qwen3-Reranker-8B"
 
-        # Load tokenizer and model
-        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        # Load model first, then tokenizer (order matters)
+        print("Loading AutoModelForSequenceClassification first...")
         self.model = AutoModelForSequenceClassification.from_pretrained(
             model_path,
-            trust_remote_code=True,
-            torch_dtype=torch.float16,
-            device_map="auto"
+            dtype=torch.float16,
+            device_map="auto",
+            trust_remote_code=True
         )
         self.model.eval()
+
+        # Now load tokenizer and set padding token
+        print("Loading tokenizer...")
+        self.tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            use_fast=True  # Use fast tokenizer
+        )
+
+        # Get tokenizer info and fix padding token
+        vocab_size = self.tokenizer.vocab_size
+        eos_token_id = self.tokenizer.eos_token_id
+
+        # Try to find a good padding token
+        # Common tokens that work well for padding
+        preferred_tokens = [
+            self.tokenizer.encode(" ", add_special_tokens=False)[0],  # space
+            self.tokenizer.encode("\n", add_special_tokens=False)[0],  # newline
+            self.tokenizer.encode("<pad>", add_special_tokens=False)[0] if "<pad>" in self.tokenizer.get_vocab() else None,
+        ]
+
+        # Find a valid token from our preferred list
+        valid_token_id = None
+        for token_id in preferred_tokens:
+            if token_id is not None and 0 <= token_id < vocab_size:
+                valid_token_id = token_id
+                valid_token = self.tokenizer.decode([token_id])
+                print(f"Using padding token: '{valid_token}' (ID: {valid_token_id})")
+                break
+
+        # Fallback to EOS token if it's valid, or use a simple token
+        if valid_token_id is None:
+            if eos_token_id < vocab_size:
+                valid_token_id = eos_token_id
+                valid_token = self.tokenizer.eos_token
+                print(f"Using EOS token for padding: {valid_token} (ID: {valid_token_id})")
+            else:
+                # Use a simple safe token - space should always work
+                valid_token_id = self.tokenizer.encode(" ", add_special_tokens=False)[0]
+                valid_token = " "
+                print(f"Using space token for padding (ID: {valid_token_id})")
+
+        # Set padding token explicitly in both tokenizer and model config
+        self.tokenizer.pad_token = valid_token
+        self.tokenizer.pad_token_id = valid_token_id
+        self.model.config.pad_token_id = valid_token_id
+
+        print("✓ Model loaded successfully!")
 
     def predict(
         self,
         instruction: str = Input(
             description="Task instruction for the reranker (recommended for better performance)",
-            default="Given a query and a document, evaluate the relevance of the document to the query."
+            default="Given a web search query, retrieve relevant passages that answer the query"
         ),
         query: str = Input(description="Query text for reranking"),
         documents: str = Input(
@@ -56,7 +103,7 @@ class Predictor(BasePredictor):
             default=8
         ),
     ) -> str:
-        """Run text reranking on the model using instruction, query, document format"""
+        """Run text reranking on the model using standard classification approach"""
         try:
             # Parse documents from JSON string
             docs_list = json.loads(documents)
@@ -69,31 +116,50 @@ class Predictor(BasePredictor):
             return json.dumps({"error": "No documents provided"})
 
         # Format each document with instruction, query, doc
-        formatted_texts = []
+        pairs = []
         for doc in docs_list:
-            # Use the format from the Hugging Face documentation
-            formatted_text = f"<Instruct>: {instruction}\n<Query>: {query}\n<Document>: {doc}"
-            formatted_texts.append(formatted_text)
+            formatted_pair = f"{instruction}\nQuery: {query}\nDocument: {doc}"
+            pairs.append(formatted_pair)
 
         rerank_scores = []
 
         # Process in batches to avoid memory issues
-        for i in range(0, len(formatted_texts), batch_size):
-            batch_texts = formatted_texts[i:i + batch_size]
+        for i in range(0, len(pairs), batch_size):
+            batch_pairs = pairs[i:i + batch_size]
 
+            # Standard classification tokenizer approach
+            inputs = self.tokenizer(
+                batch_pairs,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors="pt"
+            )
+
+            # Move to device
+            for key in inputs:
+                inputs[key] = inputs[key].to(self.model.device)
+
+            # Get model outputs
             with torch.no_grad():
-                inputs = self.tokenizer(
-                    batch_texts,
-                    padding=True,
-                    truncation=True,
-                    max_length=512,
-                    return_tensors="pt"
-                ).to(self.model.device)
-
                 outputs = self.model(**inputs)
-                batch_scores = outputs.logits.squeeze(-1).cpu().float().tolist()
+                logits = outputs.logits
 
-                if isinstance(batch_scores, float):
+                # For reranking, extract the relevance score
+                # For binary classification, we typically want the positive class score
+                if len(logits.shape) == 3:  # [batch, seq_len, num_classes]
+                    scores = logits[:, -1, 1]  # Last token, positive class
+                elif len(logits.shape) == 2:  # [batch, num_classes]
+                    scores = logits[:, 1]  # Positive class
+                else:
+                    scores = logits  # Fallback
+
+                batch_scores = scores.cpu().float().tolist()
+
+                # Ensure we always return a list
+                if isinstance(batch_scores, torch.Tensor):
+                    batch_scores = batch_scores.tolist()
+                elif isinstance(batch_scores, float):
                     batch_scores = [batch_scores]
 
                 rerank_scores.extend(batch_scores)
